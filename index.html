@@ -39,7 +39,7 @@ details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointe
 <script>
 const SUPABASE_URL = 'https://fucmwydsvahpdyydfzfm.supabase.co', SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1Y213eWRzdmFocGR5eWRmemZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NzM1MDcsImV4cCI6MjEwODM0OTUwN30.WFwzqWjPlUN_zMKyHbtITAQFEwf4tYyzFfhykeb2xkQ';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const S = { players: [], games: [], sets: [], admin: false, pick: new Set(), touched: false };
+const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => n > 0 ? `<span class="pos">+${n}</span>` : n < 0 ? `<span class="neg">${n}</span>` : `<span class="mut">0</span>`;
@@ -50,10 +50,16 @@ const bal = p => +p.deposit - +p.withdraw + live().reduce((a, g) => a + (g.delta
 async function load() {
   const [p, g, s, a] = await Promise.all([db.from('players').select('*').order('name'), db.from('games').select('*').order('id'),
     db.from('settlements').select('*').order('id', { ascending: false }), db.auth.getSession()]);
-  S.players = p.data || []; S.games = g.data || []; S.sets = s.data || []; S.admin = !!a.data.session;
-  const last = S.games[S.games.length - 1];  // pre-pick the same 8 as the last game
-  if (!S.touched && last) S.pick = new Set(S.players.filter(x => last.players.includes(x.name)).map(x => x.id));
+  S.players = p.data || []; S.games = g.data || []; S.sets = s.data || [];
+  S.role = a.data.session?.user?.app_metadata?.role || null; S.admin = S.role === 'admin';
+  if (!S.touched) prefill();
   render();
+}
+const open = () => S.games.filter(g => !g.done), busy = () => open().flatMap(g => g.players);
+function defName() { const u = open().map(g => g.name); let i = 1; while (u.includes('Lobby ' + i)) i++; return 'Lobby ' + i; }
+function prefill() {  // pre-pick the roster of this lobby's last game, minus anyone playing elsewhere
+  const done = S.games.filter(g => g.done).reverse(), last = done.find(g => g.name === defName()) || done[0], b = busy();
+  S.pick = new Set(S.players.filter(x => last && last.players.includes(x.name) && !b.includes(x.name)).map(x => x.id));
 }
 async function login() {
   const email = prompt('Admin email'); if (!email) return;
@@ -78,9 +84,9 @@ async function withdraw(id) {
 function toggle(id) { S.touched = true; S.pick.has(id) ? S.pick.delete(id) : S.pick.add(id); render(); }
 function clearPick() { S.touched = true; S.pick.clear(); render(); }
 async function createLobby() {
-  const names = S.players.filter(p => S.pick.has(p.id)).map(p => p.name);
+  const names = S.players.filter(p => S.pick.has(p.id)).map(p => p.name), name = $('ln').value.trim() || defName();
   S.touched = false;
-  if (!fail(await db.from('games').insert({ players: names }))) load();
+  if (!fail(await db.from('games').insert({ players: names, name }))) load();
 }
 async function randomTeams(id) {
   const a = [...S.games.find(g => g.id === id).players];
@@ -89,7 +95,7 @@ async function randomTeams(id) {
 }
 async function saveResults(id) {
   const g = S.games.find(x => x.id === id), places = {};
-  document.querySelectorAll('select[data-n]').forEach(s => places[s.dataset.n] = +s.value);
+  document.querySelectorAll(`#lb${id} select[data-n]`).forEach(s => places[s.dataset.n] = +s.value);
   if (Object.values(places).includes(0)) return alert('Give every player a placement from 1 to 8.');
   const r = settle(g.teams, places);
   if (!fail(await db.from('games').update({ places, deltas: r.deltas, jar: r.jar, done: true }).eq('id', id))) load();
@@ -104,26 +110,32 @@ async function closePeriod() {
   await Promise.all(S.players.map(p => db.from('players').update({ deposit: bal(p), withdraw: 0 }).eq('id', p.id)));
   load();
 }
-function sync() {  // each placement can only be used once
-  const sel = [...document.querySelectorAll('select[data-n]')], used = sel.map(s => s.value);
+function sync(L) {  // each placement can only be used once, per lobby
+  const sel = [...document.querySelectorAll(`#lb${L} select[data-n]`)], used = sel.map(s => s.value);
   sel.forEach(s => [...s.options].forEach(o => { o.hidden = o.disabled = o.value !== '0' && o.value !== s.value && used.includes(o.value); }));
 }
 const COL = ['#9a7b3f', '#4f6d7a', '#5f7f5f', '#7a5a78'];
-function lobby() {
-  const g = S.games.find(x => !x.done), ad = S.admin;
-  if (!g) {
-    if (!ad) return `<section><h2>Lobby</h2><p class="mut">No game in progress.</p></section>`;
-    const chips = S.players.map(p => `<button class="chip ${S.pick.has(p.id) ? 'on' : ''}" onclick="toggle(${p.id})">${esc(p.name)}</button>`).join('');
-    return `<section><h2>New lobby</h2><p class="mut">The players from the last game are already picked. Tap a name to swap anyone (${S.pick.size}/8).</p>
-      <div class="row">${chips}</div><p class="row"><button ${S.pick.size === 8 ? '' : 'disabled'} onclick="createLobby()">Create lobby</button><button class="ghost" onclick="clearPick()">Clear</button></p></section>`;
-  }
-  const sel = n => `<select data-n="${esc(n)}" onchange="sync()"><option value="0">-</option>${[1,2,3,4,5,6,7,8].map(i => `<option>${i}</option>`).join('')}</select>`;
+function lobbyCard(g) {
+  const st = !!S.role, ad = S.admin, L = g.id;
+  const sel = n => `<select data-n="${esc(n)}" data-l="${L}" onchange="sync(${L})"><option value="0">-</option>${[1,2,3,4,5,6,7,8].map(i => `<option>${i}</option>`).join('')}</select>`;
   const body = g.teams
     ? `<div class="teams">${g.teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map(n => `<div>${esc(n)} ${ad ? sel(n) : ''}</div>`).join('')}</div>`).join('')}</div>`
     : `<p>${g.players.map(esc).join(', ')}</p>`;
-  const btns = ad ? `<div class="row"><button onclick="randomTeams(${g.id})">${g.teams ? 'Re-roll teams' : 'Random teams'}</button>
-    <button ${g.teams ? '' : 'disabled'} onclick="saveResults(${g.id})">Save results</button><button class="ghost" onclick="cancelLobby(${g.id})">Delete lobby</button></div>` : '';
-  return `<section><h2>Lobby in progress</h2>${body}${btns}</section>`;
+  const btns = st ? `<div class="row"><button onclick="randomTeams(${L})">${g.teams ? 'Re-roll teams' : 'Random teams'}</button>
+    ${ad ? `<button ${g.teams ? '' : 'disabled'} onclick="saveResults(${L})">Save results</button>` : ''}<button class="ghost" onclick="cancelLobby(${L})">Delete lobby</button></div>
+    ${ad ? '' : '<p class="mut">The admin enters the results.</p>'}` : '';
+  return `<section id="lb${L}"><h2>${esc(g.name || 'Lobby')}</h2>${body}${btns}</section>`;
+}
+function newLobby() {
+  if (!S.role) return '';
+  const b = busy(), chips = S.players.map(p => `<button class="chip ${S.pick.has(p.id) ? 'on' : ''}" ${b.includes(p.name) ? 'disabled' : ''} onclick="toggle(${p.id})">${esc(p.name)}</button>`).join('');
+  return `<section><h2>New lobby</h2><p class="mut">Players from this lobby's last game are already picked. Players in another lobby are greyed out (${S.pick.size}/8).</p>
+    <div class="row"><input id="ln" value="${defName()}" aria-label="Lobby name"></div><div class="row" style="margin:12px 0">${chips}</div>
+    <p class="row"><button ${S.pick.size === 8 ? '' : 'disabled'} onclick="createLobby()">Create lobby</button><button class="ghost" onclick="clearPick()">Clear</button></p></section>`;
+}
+function lobbies() {
+  const o = open();
+  return (o.length ? o.map(lobbyCard).join('') : (S.role ? '' : `<section><h2>Lobby</h2><p class="mut">No game in progress.</p></section>`)) + newLobby();
 }
 function rows() {
   const gs = live();
@@ -148,8 +160,14 @@ function history() {
   return `<section><h2>History</h2>${items}</section>`;
 }
 function render() {
-  $('bar').innerHTML = S.admin ? `<span class="mut">Admin</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Admin login</button>`;
-  $('app').innerHTML = lobby() + sheet() + history(); sync();
+  const keep = {}, inp = {};
+  document.querySelectorAll('select[data-n]').forEach(s => keep[s.dataset.l + '|' + s.dataset.n] = s.value);
+  ['np', 'nd', 'ln'].forEach(i => { if ($(i)) inp[i] = $(i).value; });
+  $('bar').innerHTML = S.role ? `<span class="mut">${S.role === 'admin' ? 'Admin' : 'Host'}</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Staff login</button>`;
+  $('app').innerHTML = lobbies() + sheet() + history();
+  document.querySelectorAll('select[data-n]').forEach(s => { const v = keep[s.dataset.l + '|' + s.dataset.n]; if (v) s.value = v; });
+  Object.entries(inp).forEach(([i, v]) => { if ($(i) && v) $(i).value = v; });
+  open().forEach(g => sync(g.id));
 }
-load(); setInterval(() => { if (!S.admin) load(); }, 15000);
+load(); setInterval(load, 10000);
 </script></body></html>
