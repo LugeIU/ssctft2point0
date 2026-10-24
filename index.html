@@ -68,7 +68,11 @@ async function login() {
   await load();
   if (!S.role) alert(`Logged in as ${email}, but this account has no role yet. Run schema_roles.sql in Supabase (with the right emails), then log out and log in again.`);
 }
-async function logout() { await db.auth.signOut(); load(); }
+async function logout() {
+  try { await db.auth.signOut({ scope: 'local' }); } catch (e) {}
+  try { Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  location.reload();
+}
 async function addPlayer() {
   const name = $('np').value.trim(); if (!name) return;
   if (!fail(await db.from('players').insert({ name, deposit: +$('nd').value || 0 }))) load();
