@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>et et si tai ep tai</title>
+<title>💕 𝓷𝓰𝓾 𝓵ớ̥𝓶𝓶 💕</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#fcfcfb;--ink:#161616;--mut:#85857f;--line:#e4e4e0;--pos:#2f7a5a;--neg:#b4473e;--acc:#9a7b3f;--btn:#161616;--btnink:#fcfcfb}
@@ -9,7 +9,7 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.6 Geist,Inter,system-ui,sans-serif;font-variant-numeric:tabular-nums}
 header{padding:56px 24px 24px;text-align:center}
-h1{margin:0;font:400 clamp(36px,7vw,60px)/1.05 "Instrument Serif",Georgia,serif;font-style:italic;letter-spacing:-.01em}
+h1{margin:0;font:400 clamp(36px,7vw,60px)/1.05 "Instrument Serif",Georgia,serif;font-style:normal;letter-spacing:-.01em}
 h2{margin:0 0 14px;font:400 26px/1.2 "Instrument Serif",Georgia,serif}
 #bar{display:flex;gap:12px;justify-content:center;align-items:center;margin-top:18px}
 main{max-width:1040px;margin:0 auto;padding:8px 24px 72px;display:grid;gap:48px}
@@ -28,18 +28,18 @@ input,select{font:inherit;padding:6px 10px;border:1px solid var(--line);border-r
 .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;white-space:nowrap}
 th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:right}th{color:var(--mut);font-weight:500;font-size:13px}
 th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--bg)}
-.pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--mut)}td.edit{cursor:pointer;text-decoration:underline dotted var(--mut)}
+.pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--mut)}th.edit{cursor:pointer;color:var(--acc);text-decoration:underline dotted}td.edit{cursor:pointer;text-decoration:underline dotted var(--mut)}
 details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointer}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 </style></head><body>
-<header><h1>et et si tai ep tai</h1><div id="bar"></div></header>
+<header><h1>💕 𝓷𝓰𝓾 𝓵ớ̥𝓶𝓶 💕</h1><div id="bar"></div></header>
 <main id="app"></main>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="scoring.js"></script>
 <script>
 const SUPABASE_URL = 'https://fucmwydsvahpdyydfzfm.supabase.co', SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1Y213eWRzdmFocGR5eWRmemZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NzM1MDcsImV4cCI6MjEwODM0OTUwN30.WFwzqWjPlUN_zMKyHbtITAQFEwf4tYyzFfhykeb2xkQ';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false };
+const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false, editing: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => n > 0 ? `<span class="pos">+${n}</span>` : n < 0 ? `<span class="neg">${n}</span>` : `<span class="mut">0</span>`;
@@ -51,7 +51,7 @@ async function load() {
   const [p, g, s, a] = await Promise.all([db.from('players').select('*').order('name'), db.from('games').select('*').order('id'),
     db.from('settlements').select('*').order('id', { ascending: false }), db.auth.getSession()]);
   S.players = p.data || []; S.games = g.data || []; S.sets = s.data || [];
-  S.role = a.data.session?.user?.app_metadata?.role || null; S.admin = S.role === 'admin';
+  S.role = a.data.session?.user?.app_metadata?.role || null; S.email = a.data.session?.user?.email || null; S.admin = S.role === 'admin';
   if (!S.touched) prefill();
   render();
 }
@@ -64,7 +64,9 @@ function prefill() {  // pre-pick the roster of this lobby's last game, minus an
 async function login() {
   const email = prompt('Admin email'); if (!email) return;
   const password = prompt('Password'); if (!password) return;
-  if (!fail(await db.auth.signInWithPassword({ email, password }))) load();
+  if (fail(await db.auth.signInWithPassword({ email, password }))) return;
+  await load();
+  if (!S.role) alert(`Logged in as ${email}, but this account has no role yet. Run schema_roles.sql in Supabase (with the right emails), then log out and log in again.`);
 }
 async function logout() { await db.auth.signOut(); load(); }
 async function addPlayer() {
@@ -115,15 +117,30 @@ function sync(L) {  // each placement can only be used once, per lobby
   sel.forEach(s => [...s.options].forEach(o => { o.hidden = o.disabled = o.value !== '0' && o.value !== s.value && used.includes(o.value); }));
 }
 const COL = ['#9a7b3f', '#4f6d7a', '#5f7f5f', '#7a5a78'];
+function openEdit(id) { S.editing = id; render(); document.getElementById('lbe' + id)?.scrollIntoView({ behavior: 'smooth' }); }
+function cancelEdit() { S.editing = null; render(); }
+async function saveEdit(id) {
+  const g = S.games.find(x => x.id === id), places = {};
+  document.querySelectorAll(`#lbe${id} select[data-n]`).forEach(s => places[s.dataset.n] = +s.value);
+  if (Object.values(places).includes(0)) return alert('Give every player a placement from 1 to 8.');
+  const r = settle(g.teams, places);
+  if (!fail(await db.from('games').update({ places, deltas: r.deltas, jar: r.jar }).eq('id', id))) { S.editing = null; load(); }
+}
+function editCard(g) {
+  const L = 'e' + g.id, n = live().findIndex(x => x.id === g.id) + 1;
+  const sel = p => `<select data-n="${esc(p)}" data-l="${L}" onchange="sync('${L}')"><option value="0">-</option>${[1,2,3,4,5,6,7,8].map(i => `<option ${g.places[p] === i ? 'selected' : ''}>${i}</option>`).join('')}</select>`;
+  const teams = g.teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map(p => `<div>${esc(p)} ${sel(p)}</div>`).join('')}</div>`).join('');
+  return `<section id="lb${L}"><h2>Edit G${n}${g.name ? ' · ' + esc(g.name) : ''}</h2><div class="teams">${teams}</div>
+    <div class="row"><button onclick="saveEdit(${g.id})">Save changes</button><button class="ghost" onclick="cancelEdit()">Cancel</button></div></section>`;
+}
 function lobbyCard(g) {
   const st = !!S.role, ad = S.admin, L = g.id;
   const sel = n => `<select data-n="${esc(n)}" data-l="${L}" onchange="sync(${L})"><option value="0">-</option>${[1,2,3,4,5,6,7,8].map(i => `<option>${i}</option>`).join('')}</select>`;
   const body = g.teams
-    ? `<div class="teams">${g.teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map(n => `<div>${esc(n)} ${ad ? sel(n) : ''}</div>`).join('')}</div>`).join('')}</div>`
+    ? `<div class="teams">${g.teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map(n => `<div>${esc(n)} ${st ? sel(n) : ''}</div>`).join('')}</div>`).join('')}</div>`
     : `<p>${g.players.map(esc).join(', ')}</p>`;
   const btns = st ? `<div class="row"><button onclick="randomTeams(${L})">${g.teams ? 'Re-roll teams' : 'Random teams'}</button>
-    ${ad ? `<button ${g.teams ? '' : 'disabled'} onclick="saveResults(${L})">Save results</button>` : ''}<button class="ghost" onclick="cancelLobby(${L})">Delete lobby</button></div>
-    ${ad ? '' : '<p class="mut">The admin enters the results.</p>'}` : '';
+    <button ${g.teams ? '' : 'disabled'} onclick="saveResults(${L})">Save results</button><button class="ghost" onclick="cancelLobby(${L})">Delete lobby</button></div>` : '';
   return `<section id="lb${L}"><h2>${esc(g.name || 'Lobby')}</h2>${body}${btns}</section>`;
 }
 function newLobby() {
@@ -135,15 +152,15 @@ function newLobby() {
 }
 function lobbies() {
   const o = open();
-  return (o.length ? o.map(lobbyCard).join('') : (S.role ? '' : `<section><h2>Lobby</h2><p class="mut">No game in progress.</p></section>`)) + newLobby();
+  return (S.role && S.editing && live().some(g => g.id === S.editing) ? editCard(live().find(g => g.id === S.editing)) : '') + (o.length ? o.map(lobbyCard).join('') : (S.role ? '' : `<section><h2>Lobby</h2><p class="mut">No game in progress.</p></section>`)) + newLobby();
 }
 function rows() {
   const gs = live();
   return S.players.map(p => { const d = gs.map(g => g.deltas[p.name]);
     return { id: p.id, name: p.name, deposit: +p.deposit, withdraw: +p.withdraw, played: d.filter(v => v !== undefined).length, bal: bal(p), d }; });
 }
-function tbl(rs, n, ad) {
-  const th = Array.from({ length: n }, (_, i) => `<th>G${i + 1}</th>`).join('');
+function tbl(rs, n, ad, ids) {
+  const th = Array.from({ length: n }, (_, i) => ids ? `<th class="edit" title="Edit this game" onclick="openEdit(${ids[i]})">G${i + 1}</th>` : `<th>G${i + 1}</th>`).join('');
   const tr = rs.map(r => `<tr><td>${esc(r.name)}</td><td ${ad ? `class="edit" onclick="editDeposit(${r.id})"` : ''}>${r.deposit}</td>
     <td>${r.withdraw || ''}${ad ? `<button class="mini" onclick="withdraw(${r.id})">Withdraw</button>` : ''}</td><td>${r.played}</td><td><b>${r.bal}</b></td>
     ${r.d.map(v => `<td>${v == null ? '' : fmt(v)}</td>`).join('')}</tr>`).join('');
@@ -152,7 +169,7 @@ function tbl(rs, n, ad) {
 function sheet() {
   const ad = S.admin;
   const add = ad ? `<div class="row" style="margin-top:12px"><input id="np" placeholder="Player name"><input id="nd" type="number" placeholder="Deposit"><button onclick="addPlayer()">Add player</button></div>` : '';
-  return `<section><div class="row between"><h2>Scoreboard</h2>${ad ? `<button onclick="closePeriod()">Settle sheet</button>` : ''}</div>${tbl(rows(), live().length, ad)}${add}</section>`;
+  return `<section><div class="row between"><h2>Scoreboard</h2>${ad ? `<button onclick="closePeriod()">Settle sheet</button>` : ''}</div>${S.role ? '<p class="mut">Tap G1, G2... to correct a game.</p>' : ''}${tbl(rows(), live().length, ad, S.role ? live().map(g => g.id) : null)}${add}</section>`;
 }
 function history() {
   if (!S.sets.length) return '';
@@ -163,11 +180,12 @@ function render() {
   const keep = {}, inp = {};
   document.querySelectorAll('select[data-n]').forEach(s => keep[s.dataset.l + '|' + s.dataset.n] = s.value);
   ['np', 'nd', 'ln'].forEach(i => { if ($(i)) inp[i] = $(i).value; });
-  $('bar').innerHTML = S.role ? `<span class="mut">${S.role === 'admin' ? 'Admin' : 'Host'}</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Staff login</button>`;
+  $('bar').innerHTML = S.role ? `<span class="mut">${S.role === 'admin' ? 'Admin' : 'Host'}</span><button class="ghost" onclick="logout()">Log out</button>` : S.email ? `<span class="neg">${esc(S.email)}: no role yet</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Staff login</button>`;
   $('app').innerHTML = lobbies() + sheet() + history();
   document.querySelectorAll('select[data-n]').forEach(s => { const v = keep[s.dataset.l + '|' + s.dataset.n]; if (v) s.value = v; });
   Object.entries(inp).forEach(([i, v]) => { if ($(i) && v) $(i).value = v; });
   open().forEach(g => sync(g.id));
+  if (S.editing) sync('e' + S.editing);
 }
 load(); setInterval(load, 10000);
 </script></body></html>
