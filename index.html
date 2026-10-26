@@ -28,7 +28,7 @@ input,select{font:inherit;padding:6px 10px;border:1px solid var(--line);border-r
 .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;white-space:nowrap}
 th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:right}th{color:var(--mut);font-weight:500;font-size:13px}
 th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--bg)}
-.pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--mut)}th.edit{cursor:pointer;color:var(--acc);text-decoration:underline dotted}td.edit{cursor:pointer;text-decoration:underline dotted var(--mut)}
+.pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--mut)}.slider{display:flex;gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:8px}.slide{flex:0 0 min(300px,82%);scroll-snap-align:start;border:1px solid var(--line);padding:28px 20px;color:var(--ink);text-decoration:none;display:flex;flex-direction:column;gap:6px;transition:border-color .15s}.slide:hover{border-color:var(--ink)}.slide-name{font:400 26px "Instrument Serif",Georgia,serif}
 details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointer}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 </style></head><body>
@@ -39,14 +39,14 @@ details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointe
 <script>
 const SUPABASE_URL = 'https://fucmwydsvahpdyydfzfm.supabase.co', SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1Y213eWRzdmFocGR5eWRmemZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NzM1MDcsImV4cCI6MjEwODM0OTUwN30.WFwzqWjPlUN_zMKyHbtITAQFEwf4tYyzFfhykeb2xkQ';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false, editing: null, wd: [] };
+const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false, editing: null, wd: [], adding: false, sel: null };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => n > 0 ? `<span class="pos">+${n}</span>` : n < 0 ? `<span class="neg">${n}</span>` : `<span class="mut">0</span>`;
 const fail = r => { if (r.error) { alert(r.error.message); return true; } };
 const pend = () => S.wd.filter(x => x.status === 'pending').length;
 const live = () => S.games.filter(g => g.done && !g.settled);
-const bal = p => +p.deposit - +p.withdraw + live().reduce((a, g) => a + (g.deltas[p.name] || 0), 0);
+const bal = p => +p.deposit + +p.pending - +p.withdraw + live().reduce((a, g) => a + (g.deltas[p.name] || 0), 0);
 
 async function load() {
   const [p, g, s, w, a] = await Promise.all([db.from('players').select('*').order('name'), db.from('games').select('*').order('id'),
@@ -76,11 +76,7 @@ async function logout() {
 }
 async function addPlayer() {
   const name = $('np').value.trim(); if (!name) return;
-  if (!fail(await db.from('players').insert({ name, deposit: +$('nd').value || 0 }))) load();
-}
-async function editDeposit(id) {
-  const v = prompt('New deposit amount'); if (v === null || v === '' || isNaN(+v)) return;
-  if (!fail(await db.from('players').update({ deposit: +v }).eq('id', id))) load();
+  if (!fail(await db.from('players').insert({ name, pending: +$('nd').value || 0 }))) { S.adding = false; load(); }
 }
 async function withdraw(id) {
   const p = S.players.find(x => x.id === id), v = +prompt(`Withdraw how much for ${p.name}?`);
@@ -89,6 +85,18 @@ async function withdraw(id) {
   if (S.admin) { if (!fail(await db.from('players').update({ withdraw: +p.withdraw + v }).eq('id', id))) load(); return; }
   if (!fail(await db.from('withdrawals').insert({ player_id: id, player_name: p.name, amount: v, requested_by: S.email }))) { alert('Request sent. The admin has to accept it.'); load(); }
 }
+async function deposit(id) {
+  const p = S.players.find(x => x.id === id), v = +prompt(`Deposit how much for ${p.name}? (a negative number fixes a mistake)`);
+  if (!v) return;
+  if (!fail(await db.from('players').update({ pending: +p.pending + v }).eq('id', id))) load();
+}
+async function renamePlayer(id) {
+  const p = S.players.find(x => x.id === id), v = prompt('New name for ' + p.name, p.name);
+  if (!v || !v.trim() || v.trim() === p.name) return;
+  if (!fail(await db.rpc('rename_player', { p_id: id, p_new: v.trim() }))) load();
+}
+function pick(id) { S.sel = S.sel === id ? null : id; render(); }
+function toggleAdd() { S.adding = !S.adding; render(); }
 async function decideWd(id, ok) {
   const x = S.wd.find(w => w.id === id); if (!x) return;
   const r = await db.from('withdrawals').update({ status: ok ? 'approved' : 'rejected', decided_at: new Date().toISOString() }).eq('id', id).eq('status', 'pending').select();
@@ -139,7 +147,7 @@ async function saveResults(id) {
   document.querySelectorAll(`#lb${id} select[data-n]`).forEach(s => places[s.dataset.n] = +s.value);
   if (Object.values(places).includes(0)) return alert('Give every player a placement from 1 to 8.');
   const r = settle(g.teams, places);
-  if (!fail(await db.from('games').update({ places, deltas: r.deltas, jar: r.jar, done: true }).eq('id', id))) load();
+  if (!fail(await db.from('games').update({ places, deltas: r.deltas, jar: r.jar, done: true }).eq('id', id))) { await db.rpc('fold_pending'); load(); }
 }
 async function cancelLobby(id) { if (confirm('Delete this lobby?') && !fail(await db.from('games').delete().eq('id', id))) load(); }
 async function closePeriod() {
@@ -148,7 +156,7 @@ async function closePeriod() {
   const snap = { n: gs.length, jar: gs.reduce((a, g) => a + +g.jar, 0), players: rows() };
   if (fail(await db.from('settlements').insert({ snapshot: snap }))) return;
   if (fail(await db.from('games').update({ settled: true }).eq('done', true).eq('settled', false))) return;
-  await Promise.all(S.players.map(p => db.from('players').update({ deposit: bal(p), withdraw: 0 }).eq('id', p.id)));
+  await Promise.all(S.players.map(p => db.from('players').update({ deposit: bal(p), pending: 0, withdraw: 0 }).eq('id', p.id)));
   load();
 }
 function sync(L) {  // each placement can only be used once, per lobby
@@ -196,31 +204,41 @@ function lobbies() {
 function rows() {
   const gs = live();
   return S.players.map(p => { const d = gs.map(g => g.deltas[p.name]);
-    return { id: p.id, name: p.name, deposit: +p.deposit, withdraw: +p.withdraw, played: d.filter(v => v !== undefined).length, bal: bal(p), d }; });
+    return { id: p.id, name: p.name, deposit: +p.pending, withdraw: +p.withdraw, played: d.filter(v => v !== undefined).length, bal: bal(p), d }; });
 }
 function tbl(rs, n, ad, ids) {
-  const th = Array.from({ length: n }, (_, i) => ids ? `<th class="edit" title="Edit this game" onclick="openEdit(${ids[i]})">G${i + 1}</th>` : `<th>G${i + 1}</th>`).join('');
-  const tr = rs.map(r => `<tr><td>${esc(r.name)}</td><td ${ad ? `class="edit" onclick="editDeposit(${r.id})"` : ''}>${r.deposit}</td>
-    <td>${r.withdraw || ''}${ad ? `<button class="mini" onclick="withdraw(${r.id})">Withdraw</button>` : ''}</td><td>${r.played}</td><td><b>${r.bal}</b></td>
+  const th = Array.from({ length: n }, (_, i) => ids ? `<th onclick="openEdit(${ids[i]})">G${i + 1}</th>` : `<th>G${i + 1}</th>`).join('');
+  const tr = rs.map(r => `<tr><td ${ad ? `onclick="pick(${r.id})"` : ''}>${esc(r.name)}</td><td>${r.deposit}</td>
+    <td>${r.withdraw || ''}</td><td>${r.played}</td><td><b>${r.bal}</b></td>
     ${r.d.map(v => `<td>${v == null ? '' : fmt(v)}</td>`).join('')}</tr>`).join('');
   return `<div class="wrap"><table><thead><tr><th>Player</th><th>Deposit</th><th>Withdraw</th><th>Games</th><th>Balance</th>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 function sheet() {
   const ad = S.admin, st = !!S.role;
-  const add = st ? `<div class="row" style="margin-top:12px"><input id="np" placeholder="Player name"><input id="nd" type="number" placeholder="Deposit"><button onclick="addPlayer()">Add player</button></div>` : '';
-  return `<section><div class="row between"><h2>Scoreboard</h2>${ad ? `<span class="row"><button class="ghost" onclick="backup()">Backup to Google Sheet</button><button class="ghost" onclick="resetBackup()">Backup link</button><button onclick="closePeriod()">Settle sheet</button></span>` : ''}</div>${S.role ? '<p class="mut">Tap G1, G2... to correct a game.</p>' : ''}${tbl(rows(), live().length, st, S.role ? live().map(g => g.id) : null)}${add}</section>`;
+  const sp = st && S.sel ? S.players.find(x => x.id === S.sel) : null;
+  const panel = sp ? `<div class="row" style="margin:12px 0"><b>${esc(sp.name)}</b><button onclick="deposit(${sp.id})">Deposit</button><button onclick="withdraw(${sp.id})">Withdraw</button><button class="ghost" onclick="renamePlayer(${sp.id})">Rename</button><button class="ghost" onclick="pick(null)">Close</button></div>` : '';
+  const add = st ? `<div class="row" style="margin-top:12px">${S.adding ? `<input id="np" placeholder="Player name"><input id="nd" type="number" placeholder="Deposit"><button onclick="addPlayer()">Add</button><button class="ghost" onclick="toggleAdd()">Cancel</button>` : `<button onclick="toggleAdd()">Add player</button>`}</div>` : '';
+  return `<section><div class="row between"><h2>Scoreboard</h2>${ad ? `<span class="row"><button class="ghost" onclick="backup()">Backup to Google Sheet</button><button class="ghost" onclick="resetBackup()">Backup link</button><button onclick="closePeriod()">Settle sheet</button></span>` : ''}</div>${panel}${tbl(rows(), live().length, st, S.role ? live().map(g => g.id) : null)}${add}</section>`;
 }
 function history() {
   if (!S.sets.length) return '';
   const items = S.sets.map((s, i) => `<details><summary>Settlement #${S.sets.length - i} · ${new Date(s.created_at).toLocaleDateString('vi-VN')} · ${s.snapshot.n} games · jar ${s.snapshot.jar}</summary>${tbl(s.snapshot.players, s.snapshot.n, false)}</details>`).join('');
   return `<section><h2>History</h2>${items}</section>`;
 }
+const CHANNELS = [
+  { name: 'yby1', site: 'YouTube', url: 'https://www.youtube.com/@YBY1TFT' },
+  { name: 'wasianiverson', site: 'Twitch', url: 'https://www.twitch.tv/wasianiverson' },
+  { name: 'midfeed', site: 'YouTube', url: 'https://www.youtube.com/@midfeedsobad' },
+];
+function channels() {
+  return `<section><h2>đầu trâu thì vào đây</h2><div class="slider">${CHANNELS.map(c => `<a class="slide" href="${c.url}" target="_blank" rel="noopener"><span class="slide-name">${esc(c.name)}</span><span class="mut">${c.site}</span></a>`).join('')}</div></section>`;
+}
 function render() {
   const keep = {}, inp = {};
   document.querySelectorAll('select[data-n]').forEach(s => keep[s.dataset.l + '|' + s.dataset.n] = s.value);
   ['np', 'nd', 'ln'].forEach(i => { if ($(i)) inp[i] = $(i).value; });
   $('bar').innerHTML = S.role ? `<span class="mut">${S.role === 'admin' ? 'Admin' : 'Host'}</span>${S.admin && pend() ? `<span class="neg">🔔 ${pend()} withdrawal request(s)</span>` : ''}<button class="ghost" onclick="logout()">Log out</button>` : S.email ? `<span class="neg">${esc(S.email)}: no role yet</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Staff login</button>`;
-  $('app').innerHTML = requests() + lobbies() + sheet() + history();
+  $('app').innerHTML = requests() + lobbies() + sheet() + history() + channels();
   document.querySelectorAll('select[data-n]').forEach(s => { const v = keep[s.dataset.l + '|' + s.dataset.n]; if (v) s.value = v; });
   Object.entries(inp).forEach(([i, v]) => { if ($(i) && v) $(i).value = v; });
   open().forEach(g => sync(g.id));
