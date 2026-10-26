@@ -30,6 +30,10 @@ th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:right}th{
 th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--bg)}
 .pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--mut)}.slider{display:flex;gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:8px}.slide{flex:0 0 min(300px,82%);scroll-snap-align:start;border:1px solid var(--line);padding:28px 20px;color:var(--ink);text-decoration:none;display:flex;flex-direction:column;gap:6px;transition:border-color .15s}.slide:hover{border-color:var(--ink)}.slide-name{font:400 26px "Instrument Serif",Georgia,serif}
 details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointer}
+#roll{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 94%,transparent);display:grid;place-items:center;z-index:50;padding:16px}
+.rollbox{width:min(820px,100%)}.slot{padding:8px 4px;border-bottom:1px solid var(--line);min-height:42px;font-size:18px}
+.slot.spin{color:var(--mut)}.slot.lock{animation:pop .25s}@keyframes pop{50%{transform:scale(1.06)}}
+.cf{position:fixed;top:-16px;width:8px;height:14px;z-index:60;animation:fall 2.4s linear forwards}@keyframes fall{to{transform:translateY(108vh) rotate(600deg)}}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 </style></head><body>
 <header><h1>💕 𝓷𝓰𝓾 𝓵ớ̥𝓶𝓶 💕</h1><div id="bar"></div></header>
@@ -39,7 +43,7 @@ details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointe
 <script>
 const SUPABASE_URL = 'https://fucmwydsvahpdyydfzfm.supabase.co', SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ1Y213eWRzdmFocGR5eWRmemZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3NzM1MDcsImV4cCI6MjEwODM0OTUwN30.WFwzqWjPlUN_zMKyHbtITAQFEwf4tYyzFfhykeb2xkQ';
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false, editing: null, wd: [], adding: false, sel: null };
+const S = { players: [], games: [], sets: [], admin: false, role: null, pick: new Set(), touched: false, editing: null, wd: [], adding: false, sel: null, manual: null, rolling: false };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => n > 0 ? `<span class="pos">+${n}</span>` : n < 0 ? `<span class="neg">${n}</span>` : `<span class="mut">0</span>`;
@@ -132,15 +136,59 @@ function requests() {
 }
 function toggle(id) { S.touched = true; S.pick.has(id) ? S.pick.delete(id) : S.pick.add(id); render(); }
 function clearPick() { S.touched = true; S.pick.clear(); render(); }
-async function createLobby() {
+async function createLobby(manual) {
   const names = S.players.filter(p => S.pick.has(p.id)).map(p => p.name), name = $('ln').value.trim() || defName();
   S.touched = false;
-  if (!fail(await db.from('games').insert({ players: names, name }))) load();
+  const r = await db.from('games').insert({ players: names, name }).select().single();
+  if (fail(r)) return;
+  if (manual === true) S.manual = r.data.id;
+  load();
+}
+function confetti() {
+  const cols = [...COL, '#e0796f', '#f2c14e'];
+  for (let i = 0; i < 70; i++) {
+    const c = document.createElement('i'); c.className = 'cf';
+    c.style.cssText = `left:${Math.random() * 100}vw;background:${cols[i % cols.length]};animation-delay:${Math.random() * .6}s`;
+    document.body.appendChild(c); setTimeout(() => c.remove(), 3200);
+  }
+}
+function rollAnim(teams) {  // names flicker in each slot, then lock one by one
+  return new Promise(done => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return done();
+    const ov = document.createElement('div'); ov.id = 'roll';
+    ov.innerHTML = `<div class="rollbox"><h2>Rolling teams</h2><div class="teams">${teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map((_, j) => `<div class="slot" id="rs${i}${j}">&nbsp;</div>`).join('')}</div>`).join('')}</div></div>`;
+    document.body.appendChild(ov);
+    const all = teams.flat(), slots = teams.flatMap((t, i) => t.map((n, j) => [document.getElementById(`rs${i}${j}`), n]));
+    let k = 0;
+    const next = () => {
+      if (k >= slots.length) { confetti(); setTimeout(() => { ov.remove(); done(); }, 1800); return; }
+      const [el, name] = slots[k], left = all.filter(n => !slots.slice(0, k).some(s => s[1] === n));
+      k++; el.classList.add('spin');
+      const iv = setInterval(() => { el.textContent = left[Math.floor(Math.random() * left.length)]; }, 55);
+      setTimeout(() => { clearInterval(iv); el.textContent = name; el.classList.replace('spin', 'lock'); setTimeout(next, 220); }, 600);
+    };
+    next();
+  });
 }
 async function randomTeams(id) {
+  if (S.rolling) return;
   const a = [...S.games.find(g => g.id === id).players];
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-  if (!fail(await db.from('games').update({ teams: [[a[0], a[1]], [a[2], a[3]], [a[4], a[5]], [a[6], a[7]]] }).eq('id', id))) load();
+  const teams = [[a[0], a[1]], [a[2], a[3]], [a[4], a[5]], [a[6], a[7]]];
+  S.rolling = true; await rollAnim(teams); S.rolling = false;
+  if (!fail(await db.from('games').update({ teams }).eq('id', id))) load();
+}
+function manualTeams(id) { S.manual = id; render(); }
+function cancelManual() { S.manual = null; render(); }
+function syncM(L) {
+  const sel = [...document.querySelectorAll(`#lb${L} select[data-m]`)], used = sel.map(s => s.value);
+  sel.forEach(s => [...s.options].forEach(o => { o.hidden = o.disabled = o.value !== '' && o.value !== s.value && used.includes(o.value); }));
+}
+async function saveManual(id) {
+  const v = [...document.querySelectorAll(`#lb${id} select[data-m]`)].map(s => s.value);
+  if (v.includes('') || new Set(v).size !== 8) return alert('Fill every slot with a different player.');
+  S.manual = null;
+  if (!fail(await db.from('games').update({ teams: [[v[0], v[1]], [v[2], v[3]], [v[4], v[5]], [v[6], v[7]]] }).eq('id', id))) load();
 }
 async function saveResults(id) {
   const g = S.games.find(x => x.id === id), places = {};
@@ -181,12 +229,16 @@ function editCard(g) {
     <div class="row"><button onclick="saveEdit(${g.id})">Save changes</button><button class="ghost" onclick="cancelEdit()">Cancel</button></div></section>`;
 }
 function lobbyCard(g) {
-  const st = !!S.role, ad = S.admin, L = g.id;
+  const st = !!S.role, ad = S.admin, L = g.id, man = ad && S.manual === g.id;
   const sel = n => `<select data-n="${esc(n)}" data-l="${L}" onchange="sync(${L})"><option value="0">-</option>${[1,2,3,4,5,6,7,8].map(i => `<option>${i}</option>`).join('')}</select>`;
-  const body = g.teams
+  const msel = (i, j) => `<select data-m="${L}" data-k="${i}${j}" onchange="syncM(${L})"><option value="">-</option>${g.players.map(n => `<option ${g.teams && g.teams[i][j] === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+  const body = man
+    ? `<div class="teams">${[0, 1, 2, 3].map(i => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${[0, 1].map(j => `<div>${msel(i, j)}</div>`).join('')}</div>`).join('')}</div>`
+    : g.teams
     ? `<div class="teams">${g.teams.map((t, i) => `<div class="team" style="--c:${COL[i]}"><b>Team ${i + 1}</b>${t.map(n => `<div>${esc(n)} ${st ? sel(n) : ''}</div>`).join('')}</div>`).join('')}</div>`
     : `<p>${g.players.map(esc).join(', ')}</p>`;
-  const btns = st ? `<div class="row"><button onclick="randomTeams(${L})">${g.teams ? 'Re-roll teams' : 'Random teams'}</button>
+  const btns = man ? `<div class="row"><button onclick="saveManual(${L})">Save teams</button><button class="ghost" onclick="cancelManual()">Cancel</button></div>`
+    : st ? `<div class="row"><button onclick="randomTeams(${L})">${g.teams ? 'Re-roll teams' : 'Random teams'}</button>${ad ? `<button class="ghost" onclick="manualTeams(${L})">Pick teams manually</button>` : ''}
     <button ${g.teams ? '' : 'disabled'} onclick="saveResults(${L})">Save results</button><button class="ghost" onclick="cancelLobby(${L})">Delete lobby</button></div>` : '';
   return `<section id="lb${L}"><h2>${esc(g.name || 'Lobby')}</h2>${body}${btns}</section>`;
 }
@@ -195,7 +247,7 @@ function newLobby() {
   const b = busy(), chips = S.players.map(p => `<button class="chip ${S.pick.has(p.id) ? 'on' : ''}" ${b.includes(p.name) ? 'disabled' : ''} onclick="toggle(${p.id})">${esc(p.name)}</button>`).join('');
   return `<section><h2>New lobby</h2><p class="mut">Players from this lobby's last game are already picked. Players in another lobby are greyed out (${S.pick.size}/8).</p>
     <div class="row"><input id="ln" value="${defName()}" aria-label="Lobby name"></div><div class="row" style="margin:12px 0">${chips}</div>
-    <p class="row"><button ${S.pick.size === 8 ? '' : 'disabled'} onclick="createLobby()">Create lobby</button><button class="ghost" onclick="clearPick()">Clear</button></p></section>`;
+    <p class="row"><button ${S.pick.size === 8 ? '' : 'disabled'} onclick="createLobby()">Create lobby</button>${S.admin ? `<button class="ghost" ${S.pick.size === 8 ? '' : 'disabled'} onclick="createLobby(true)">Create with manual teams</button>` : ''}<button class="ghost" onclick="clearPick()">Clear</button></p></section>`;
 }
 function lobbies() {
   const o = open();
@@ -235,11 +287,14 @@ function channels() {
 }
 function render() {
   const keep = {}, inp = {};
+  document.querySelectorAll('select[data-m]').forEach(s => keep['m' + s.dataset.m + s.dataset.k] = s.value);
   document.querySelectorAll('select[data-n]').forEach(s => keep[s.dataset.l + '|' + s.dataset.n] = s.value);
   ['np', 'nd', 'ln'].forEach(i => { if ($(i)) inp[i] = $(i).value; });
   $('bar').innerHTML = S.role ? `<span class="mut">${S.role === 'admin' ? 'Admin' : 'Host'}</span>${S.admin && pend() ? `<span class="neg">🔔 ${pend()} withdrawal request(s)</span>` : ''}<button class="ghost" onclick="logout()">Log out</button>` : S.email ? `<span class="neg">${esc(S.email)}: no role yet</span><button class="ghost" onclick="logout()">Log out</button>` : `<button class="ghost" onclick="login()">Staff login</button>`;
   $('app').innerHTML = requests() + lobbies() + sheet() + history() + channels();
   document.querySelectorAll('select[data-n]').forEach(s => { const v = keep[s.dataset.l + '|' + s.dataset.n]; if (v) s.value = v; });
+  document.querySelectorAll('select[data-m]').forEach(s => { const v = keep['m' + s.dataset.m + s.dataset.k]; if (v) s.value = v; });
+  if (S.manual) syncM(S.manual);
   Object.entries(inp).forEach(([i, v]) => { if ($(i) && v) $(i).value = v; });
   open().forEach(g => sync(g.id));
   if (S.editing) sync('e' + S.editing);
